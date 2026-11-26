@@ -1,8 +1,9 @@
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from app.db import db, rows_to_list
-from app.services.common import audit, now_str
+from app.db import db
+from app.services.common import audit
+from app.services import delivery
 
 router = APIRouter(tags=["通道"])
 
@@ -15,8 +16,9 @@ class ChannelPatch(BaseModel):
 
 @router.get("/通道")
 def list_channels():
+    # 占用余量旁读：在途数从重放视图统计，与路况/轧差同一真源。
     with db() as conn:
-        rows = rows_to_list(conn.execute("SELECT * FROM channels ORDER BY role, id").fetchall())
+        rows = delivery.channel_occupancy(conn)
     return [
         {
             "编号": r["id"],
@@ -28,6 +30,8 @@ def list_channels():
             "并发上限": r["concurrency_limit"],
             "失败阈值": r["fail_threshold"],
             "连续失败": r["consecutive_fails"],
+            "在途占用": r["inflight"],
+            "占用余量": r["spare"],
         }
         for r in rows
     ]

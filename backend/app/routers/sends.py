@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.db import db, rows_to_list
 from app.services.common import audit, now_str
+from app.services import delivery
 
 router = APIRouter(tags=["投递"])
 
@@ -11,6 +12,11 @@ router = APIRouter(tags=["投递"])
 class SendCreate(BaseModel):
     手机掩码: str = Field(min_length=3)
     场景: str = "登录"
+    备注: str = ""
+
+
+class CorrectBody(BaseModel):
+    目标状态: str
     备注: str = ""
 
 
@@ -34,34 +40,84 @@ def pick_channel(conn):
     return row
 
 
+def _serialize(r: dict) -> dict:
+    return {
+        "编号": r["id"],
+        "投递单号": r["serial"],
+        "手机掩码": r["phone_mask"],
+        "场景": r["scene"],
+        # 读侧只认真源重放态；缓存态单独留作对照，不用于业务判断。
+        "状态": r["effective_status"],
+        "缓存状态": r["status"],
+        "投影偏差": bool(r["projection_drift"]),
+        "通道": r.get("channel_name") or "-",
+        "切备通道": r.get("failover_name") or "-",
+        "送达序号": r["deliver_seq"],
+        "单态戳": r["delivered_at"],
+        "最近回执序号": r["latest_receipt_seq"],
+        "缺回执": r["latest_receipt_id"] is None,
+        "创建时间": r["created_at"],
+        "备注": r["note"],
+    }
+
+
 @router.get("/投递单")
 def list_sends():
     with db() as conn:
         rows = rows_to_list(
             conn.execute(
                 """
-                SELECT s.*, c.name AS channel_name, f.name AS failover_name
-                FROM sends s
-                LEFT JOIN channels c ON c.id = s.channel_id
-                LEFT JOIN channels f ON f.id = s.failover_channel_id
-                ORDER BY s.id DESC
+                SELECT v.*, c.name AS channel_name, f.name AS failover_name
+                FROM v_send_truth v
+                LEFT JOIN channels c ON c.id = v.channel_id
+                LEFT JOIN channels f ON f.id = v.failover_channel_id
+                ORDER BY v.id DESC
                 """
             ).fetchall()
         )
-    return [
-        {
-            "编号": r["id"],
-            "投递单号": r["serial"],
-            "手机掩码": r["phone_mask"],
-            "场景": r["scene"],
-            "状态": r["status"],
-            "通道": r["channel_name"] or "-",
-            "切备通道": r["failover_name"] or "-",
-            "创建时间": r["created_at"],
-            "备注": r["note"],
-        }
-        for r in rows
-    ]
+    return [_serialize(r) for r in rows]
+
+
+@router.get("/投递单/{sid}")
+def send_detail(sid: int):
+    """验码单详情终态区：终态、回执链、送达序号、单态戳、投影对照一次取齐。"""
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT v.*, c.name AS channel_name, f.name AS failover_name
+            FROM v_send_truth v
+            LEFT JOIN channels c ON c.id = v.channel_id
+            LEFT JOIN channels f ON f.id = v.failover_channel_id
+            WHERE v.id=?
+            """,
+            (sid,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "投递单不存在")
+        receipts = rows_to_list(
+            conn.execute(
+                """
+                SELECT r.id, r.seq, r.result, r.vendor_code, r.created_at, c.name AS channel_name
+                FROM receipts r JOIN channels c ON c.id = r.channel_id
+                WHERE r.send_id=? ORDER BY r.seq
+                """,
+                (sid,),
+            ).fetchall()
+        )
+    return {
+        **_serialize(dict(row)),
+        "回执链": [
+            {
+                "编号": r["id"],
+                "送达序号": r["seq"],
+                "结果": r["result"],
+                "厂商码": r["vendor_code"],
+                "通道": r["channel_name"],
+                "时间": r["created_at"],
+            }
+            for r in receipts
+        ],
+    }
 
 
 @router.post("/投递单")
@@ -70,7 +126,8 @@ def create_send(body: SendCreate):
         ch = pick_channel(conn)
         if not ch:
             raise HTTPException(400, "无可用通道")
-        serial = f"验{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # 微秒入号，避免同秒连建撞 sends.serial 唯一键。
+        serial = f"验{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         now = now_str()
         cur = conn.execute(
             """
@@ -86,20 +143,19 @@ def create_send(body: SendCreate):
 
 @router.post("/投递单/{sid}/投递")
 def dispatch_send(sid: int):
+    # 投递按钮旁路：只推进状态机在途态，不产生送达结论，不参与真源裁决。
     with db() as conn:
-        s = conn.execute("SELECT * FROM sends WHERE id=?", (sid,)).fetchone()
+        s = conn.execute("SELECT * FROM v_send_truth WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "投递单不存在")
-        if s["status"] not in ("待投递", "已切备"):
-            raise HTTPException(400, f"当前状态不可投递：{s['status']}")
+        if s["effective_status"] not in ("待投递", "已切备"):
+            raise HTTPException(400, f"当前状态不可投递：{s['effective_status']}")
         ch_id = s["failover_channel_id"] or s["channel_id"]
         ch = conn.execute("SELECT * FROM channels WHERE id=?", (ch_id,)).fetchone()
         if not ch or ch["status"] != "启用":
             raise HTTPException(400, "目标通道不可用")
-        inflight = conn.execute(
-            "SELECT COUNT(*) c FROM sends WHERE channel_id=? AND status='投递中'",
-            (ch_id,),
-        ).fetchone()["c"]
+        occ = delivery.channel_occupancy(conn)
+        inflight = next((o["inflight"] for o in occ if o["id"] == ch_id), 0)
         if inflight >= ch["concurrency_limit"]:
             raise HTTPException(400, "通道并发已满")
         conn.execute(
@@ -108,3 +164,12 @@ def dispatch_send(sid: int):
         )
         audit(conn, "投递单", sid, "投递", ch["name"])
     return {"结果": "投递中", "通道": ch["name"]}
+
+
+@router.post("/投递单/{sid}/纠正")
+def correct_send(sid: int, body: CorrectBody):
+    """缺回执纠偏位（单态侧）：只对无回执单开放，有回执一律由回执真源裁决。"""
+    with db() as conn:
+        delivery.begin_write(conn)
+        out = delivery.manual_correct_status(conn, sid, body.目标状态, body.备注)
+    return out

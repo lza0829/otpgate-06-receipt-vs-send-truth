@@ -262,3 +262,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .brand { letter-spacing: 0.16em; font-size: 2rem; }
   .nav a { padding: 0.35rem 0.5rem; font-size: 0.88rem; }
 }
+
+/* 送达真源：拧花对照、状态徽标与纠偏提示 */
+.badge {
+  display: inline-block; padding: 0.08rem 0.42rem; border-radius: 999px;
+  font-size: 0.74rem; font-weight: 500; white-space: nowrap;
+}
+.badge.ok { background: rgba(29, 122, 92, 0.14); color: var(--ok); }
+.badge.bad { background: rgba(179, 58, 43, 0.14); color: var(--danger); }
+.badge.warn { background: rgba(196, 92, 42, 0.16); color: var(--stamp); }
+tr.drift { background: rgba(179, 58, 43, 0.08); }
+tr.drift td { box-shadow: inset 2px 0 0 var(--danger); }
+.stat.warn .n { color: var(--stamp); }
+button.link {
+  background: none; border: none; padding: 0; color: var(--post);
+  font: inherit; text-decoration: underline; cursor: pointer;
+}
+.panel.inner {
+  margin-top: 0.8rem; padding: 0.9rem; border: 1px dashed var(--line);
+  background: var(--sky);
+}

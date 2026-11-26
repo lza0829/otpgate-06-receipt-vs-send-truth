@@ -28,13 +28,13 @@ export default function Overview() {
           </tbody>
         </table>
       </div>
-      <h2>通道态势</h2>
+      <h2>通道态势（占用余量探针，同走重放）</h2>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>代号</th><th>名称</th><th>角色</th><th>状态</th><th>权重</th><th>连续失败</th></tr></thead>
+          <thead><tr><th>代号</th><th>名称</th><th>角色</th><th>状态</th><th>在途占用</th><th>占用余量</th><th>并发上限</th><th>连续失败</th></tr></thead>
           <tbody>
             {(data.通道 || []).map((c) => (
-              <tr key={c.代号}><td>{c.代号}</td><td>{c.名称}</td><td>{c.角色}</td><td>{c.状态}</td><td>{c.权重}</td><td>{c.连续失败}</td></tr>
+              <tr key={c.代号}><td>{c.代号}</td><td>{c.名称}</td><td>{c.角色}</td><td>{c.状态}</td><td>{c.在途占用}</td><td className={c.占用余量 <= 0 ? 'bad' : 'ok'}>{c.占用余量}</td><td>{c.并发上限}</td><td>{c.连续失败}</td></tr>
             ))}
           </tbody>
         </table>

@@ -39,10 +39,12 @@ def list_breaks():
 @router.post("/投递单/{sid}/失败")
 def mark_fail(sid: int, body: FailBody):
     with db() as conn:
-        s = conn.execute("SELECT * FROM sends WHERE id=?", (sid,)).fetchone()
+        # 状态机旁读：可否记失败看真源重放态；此路径不写回执、不造送达结论，
+        # 形成的无回执终态会在轧差“缺回执待终结”与纠偏位中显形，可补回执重放纠正。
+        s = conn.execute("SELECT * FROM v_send_truth WHERE id=?", (sid,)).fetchone()
         if not s:
             raise HTTPException(404, "投递单不存在")
-        if s["status"] != "投递中":
+        if s["effective_status"] != "投递中":
             raise HTTPException(400, "仅投递中可记失败")
         ch = conn.execute("SELECT * FROM channels WHERE id=?", (s["channel_id"],)).fetchone()
         fails = ch["consecutive_fails"] + 1

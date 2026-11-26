@@ -19,11 +19,11 @@ export default function Channels() {
       <p className="msg">主备短信通道登记、启停与恢复</p>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>名称</th><th>角色</th><th>状态</th><th>权重</th><th>并发上限</th><th>连续失败</th><th>操作</th></tr></thead>
+          <thead><tr><th>名称</th><th>角色</th><th>状态</th><th>权重</th><th>在途占用</th><th>占用余量</th><th>并发上限</th><th>连续失败</th><th>操作</th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.编号}>
-                <td>{r.名称}</td><td>{r.角色}</td><td>{r.状态}</td><td>{r.权重}</td><td>{r.并发上限}</td><td>{r.连续失败}</td>
+                <td>{r.名称}</td><td>{r.角色}</td><td>{r.状态}</td><td>{r.权重}</td><td>{r.在途占用}</td><td className={r.占用余量 <= 0 ? 'bad' : 'ok'}>{r.占用余量}</td><td>{r.并发上限}</td><td>{r.连续失败}</td>
                 <td className="row">
                   <button type="button" className="secondary" onClick={() => patch(r.编号, { 状态: '启用' })}>启用</button>
                   <button type="button" className="secondary" onClick={() => patch(r.编号, { 状态: '停用' })}>停用</button>

@@ -1,27 +1,25 @@
 from __future__ import annotations
 from fastapi import APIRouter
 from app.db import db
+from app.services import delivery
 
 router = APIRouter(tags=["对账"])
 
 
 @router.get("/对账")
 def reconcile():
+    # 轧差大数与路况格、占用余量同源于 v_send_truth 重放，不再裸读 sends.status。
     with db() as conn:
-        sends = conn.execute("SELECT COUNT(*) c FROM sends").fetchone()["c"]
-        ok = conn.execute("SELECT COUNT(*) c FROM sends WHERE status='已送达'").fetchone()["c"]
-        fail = conn.execute("SELECT COUNT(*) c FROM sends WHERE status='已失败'").fetchone()["c"]
-        fo = conn.execute("SELECT COUNT(*) c FROM sends WHERE status='已切备'").fetchone()["c"]
-        receipts = conn.execute("SELECT COUNT(*) c FROM receipts").fetchone()["c"]
-        receipt_ok = conn.execute("SELECT COUNT(*) c FROM receipts WHERE result='成功'").fetchone()["c"]
-        breaks = conn.execute("SELECT COUNT(*) c FROM break_events WHERE action='切备'").fetchone()["c"]
-    return {
-        "投递申请数": sends,
-        "已送达": ok,
-        "已失败": fail,
-        "已切备在途": fo,
-        "回执条数": receipts,
-        "回执成功": receipt_ok,
-        "切备次数": breaks,
-        "送达与回执差": ok - receipt_ok,
-    }
+        data = delivery.reconcile_snapshot(conn)
+        data["切备次数"] = conn.execute(
+            "SELECT COUNT(*) c FROM break_events WHERE action='切备'"
+        ).fetchone()["c"]
+    return data
+
+
+@router.post("/对账/纠偏重放")
+def reconcile_replay():
+    """缺回执纠偏位：半截单态与回执拧花时，按回执事件流全量重放修回唯一真源。"""
+    with db() as conn:
+        out = delivery.replay_repair(conn)
+    return out
